@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Arduino UNO 3D (solo código) + AR</title>
+<style>
+:root{--bg1:#eef2f7;--bg2:#c9d6e6;--fg:#14202e;--ac:#1b5fc2;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg1:#1a2433;--bg2:#0b1017;--fg:#e8eef6;--ac:#6aa5ff}}
+html,body{height:100%;margin:0;overflow:hidden}
+body{background:radial-gradient(circle at 50% 40%,var(--bg1),var(--bg2));color:var(--fg);font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+canvas{display:block;width:100%;height:100%}
+#bar{position:fixed;left:0;right:0;bottom:0;display:flex;gap:.6rem;justify-content:center;padding:.8rem 1rem calc(.8rem + env(safe-area-inset-bottom,0px));flex-wrap:wrap}
+#t{position:fixed;top:calc(.6rem + env(safe-area-inset-top,0px));left:1rem;font-size:.95rem;font-weight:600}
+#t small{display:block;font-weight:400;opacity:.7;font-size:.75rem}
+button{background:var(--ac);color:#fff;border:0;border-radius:10px;padding:.65rem 1rem;font-size:.9rem}
+#m{position:fixed;top:calc(3.2rem + env(safe-area-inset-top,0px));left:1rem;right:1rem;font-size:.78rem;opacity:.8}
+</style></head><body>
+<div id="t">Arduino UNO R3 · 3D<small>Arrastra para girar · pellizca para acercar</small></div>
+<div id="m"></div>
+<video id="v" autoplay playsinline muted style="display:none;position:fixed;inset:0;width:100%;height:100%;object-fit:cover;z-index:-1"></video>
+<div id="bar"><button id="fb">📷 AR con cámara</button><button id="ex" style="display:none">✖ Salir</button></div>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/DeviceOrientationControls.js"></script>
+<script>
+const msg=document.getElementById('m');
+const renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(innerWidth,innerHeight);
+renderer.xr.enabled=true;document.body.prepend(renderer.domElement);
+const scene=new THREE.Scene();
+const camera=new THREE.PerspectiveCamera(40,innerWidth/innerHeight,.1,100);camera.position.set(-4,10,9);
+const controls=new THREE.OrbitControls(camera,renderer.domElement);controls.enableDamping=true;
+scene.add(new THREE.HemisphereLight(0xffffff,0x445566,.55));
+const sun=new THREE.DirectionalLight(0xffffff,.8);sun.position.set(5,10,6);scene.add(sun);
+const fill=new THREE.DirectionalLight(0xaaccff,.3);fill.position.set(-6,4,-5);scene.add(fill);
+const ec=document.createElement('canvas');ec.width=512;ec.height=256;const eg=ec.getContext('2d');
+const gd=eg.createLinearGradient(0,0,0,256);gd.addColorStop(0,'#fff');gd.addColorStop(.5,'#9aa7b8');gd.addColorStop(1,'#3a4452');eg.fillStyle=gd;eg.fillRect(0,0,512,256);
+eg.fillStyle='#fff';eg.fillRect(60,40,90,50);eg.fillRect(300,30,120,40);eg.fillRect(200,100,60,30);
+const env=new THREE.CanvasTexture(ec);env.mapping=THREE.EquirectangularReflectionMapping;scene.environment=env;
+
+const M=(c,r=.5,m=0)=>new THREE.MeshStandardMaterial({color:c,roughness:r,metalness:m});
+const mPCB=new THREE.MeshPhysicalMaterial({color:0x123a78,roughness:.4,clearcoat:.6,clearcoatRoughness:.3}),
+mBlk=M(0x151515,.6),mHd=M(0x181818,.5),mHole=M(0,.9),mSil=M(0xd0d3d6,.3,.6),mChip=M(0x26282c,.5),mGold=M(0xd9b44a,.3,.8),
+mWht=M(0xe8e8e8,.5),mBlue=M(0x2f7fe0,.5),mOr=M(0xd99a1b,.5),mYel=M(0xe6c43a,.5),
+mAmb=new THREE.MeshStandardMaterial({color:0xe0a830,emissive:0x553300,roughness:.4});
+const uno=new THREE.Group();
+// Todo se coloca en coordenadas de la imagen de referencia (px) -> cm
+const SX=.0098,SZ=.0096,px=a=>(a-455)*SX,pz=b=>(b-321)*SZ;
+function B(cx,cy,w,d,h,mat,y=0){const o=new THREE.Mesh(new THREE.BoxGeometry(w*SX,h,d*SZ),mat);o.position.set(px(cx),.08+y+h/2,pz(cy));uno.add(o);return o}
+function C(cx,cy,r,h,mat,y=0){const o=new THREE.Mesh(new THREE.CylinderGeometry(r,r,h,28),mat);o.position.set(px(cx),.08+y+h/2,pz(cy));uno.add(o);return o}
+
+// PCB con el contorno real (escalon a la derecha) y 3 agujeros
+const sh=new THREE.Shape();
+[[105,42],[772,42],[778,48],[778,182],[805,208],[805,590],[795,600],[115,600],[105,590]].forEach(([x,y],i)=>i?sh.lineTo(px(x),pz(y)):sh.moveTo(px(x),pz(y)));
+const holes=[[246,68],[246,565],[786,543]];
+holes.forEach(([x,y])=>{const h=new THREE.Path();h.absarc(px(x),pz(y),.16,0,7,true);sh.holes.push(h)});
+const pcb=new THREE.Mesh(new THREE.ExtrudeGeometry(sh,{depth:.16,bevelEnabled:false}),mPCB);
+pcb.rotation.x=Math.PI/2;pcb.position.y=.08;uno.add(pcb);
+holes.forEach(([x,y])=>{const r=new THREE.Mesh(new THREE.RingGeometry(.17,.24,24).rotateX(-Math.PI/2),M(0xcfd4da,.3,.7));r.position.set(px(x),.083,pz(y));uno.add(r)});
+
+// USB-B (sobresale a la izquierda) y jack DC
+B(110,203,175,131,1.1,M(0xb4b7bb,.3,.6));B(110,203,165,121,.03,M(0xc9ccd0,.3,.6),1.1);
+const ub=new THREE.Mesh(new THREE.BoxGeometry(.02,.7,.9),mBlk);ub.position.set(px(22)-.005,.63,pz(203));uno.add(ub);
+B(151,520,142,100,1.1,mBlk);B(110,520,40,60,.12,M(0x2a2a2a,.5),1.1);
+const jh=new THREE.Mesh(new THREE.CylinderGeometry(.3,.3,.02,24).rotateZ(Math.PI/2),M(0x222222,.8));jh.position.set(px(80)-.005,.63,pz(520));uno.add(jh);
+const jp=new THREE.Mesh(new THREE.CylinderGeometry(.07,.07,.4,12).rotateZ(Math.PI/2),mGold);jp.position.set(px(80)+.15,.63,pz(520));uno.add(jp);
+// Reset
+B(180,85,62,50,.35,mSil);C(180,85,.17,.18,M(0xc8381f,.5),.35);
+// Cabeceras hembra
+function hdr(x0,x1,cy,n){B((x0+x1)/2,cy,x1-x0,26,.85,mHd);for(let k=0;k<n;k++)B(x0+(x1-x0)*(k+.5)/n,cy,10,10,.02,mHole,.85)}
+hdr(268,535,78,10);hdr(565,777,78,8);hdr(377,588,575,8);hdr(607,767,575,6);
+// ICSP (2x3)
+function icsp(cx,cy,w,d,xs,ys){B(cx,cy,w,d,.25,mBlk);xs.forEach(x=>ys.forEach(y=>B(x,y,6,6,.6,mGold)))}
+icsp(280,118,88,50,[254,280,306],[108,128]);icsp(780,305,58,84,[768,792],[278,305,332]);
+// Chips SOIC: ATmega16U2 y comparador
+function soic(cx,cy,w,d,n){B(cx,cy,w,d,.14,mChip);for(let k=0;k<n;k++){const y=cy-d/2+(k+.5)*d/n;B(cx-w/2-4,y,8,4,.04,mSil);B(cx+w/2+4,y,8,4,.04,mSil)}}
+soic(293,228,63,57,8);soic(283,392,80,60,4);
+// Regulador
+B(168,402,75,95,.55,mBlk);[382,407,430].forEach(y=>B(215,y,12,8,.05,mSil));B(150,402,30,60,.12,M(0x2a2a2a,.5),.55);
+// Cristal (capsula plateada)
+const mX=M(0xe6e8ea,.25,.7);B(283,305,70,22,.35,mX);C(248,305,.105,.35,mX);C(318,305,.105,.35,mX);
+// ATmega328P DIP-28 en zocalo
+B(607,421,395,107,.3,mBlk);B(607,421,380,76,.38,mChip,.3);
+for(let k=0;k<14;k++){const x=430+25.5*k;B(x,365,8,12,.05,mSil,.22);B(x,477,8,12,.05,mSil,.22)}
+// Condensadores electroliticos con texto
+function cap(cx,cy,r){C(cx,cy,r,.6,M(0xa7aaae,.35,.7));const c2=document.createElement('canvas');c2.width=c2.height=256;const g2=c2.getContext('2d');
+g2.beginPath();g2.arc(128,128,126,0,7);g2.fillStyle='#c4c7cb';g2.fill();g2.lineWidth=14;g2.strokeStyle='#8e9196';g2.stroke();
+g2.translate(128,128);g2.rotate(-Math.PI/2);g2.fillStyle='#222';g2.font='bold 40px Arial';g2.textAlign='center';['83141','47','16V'].forEach((t,i)=>g2.fillText(t,0,(i-1)*52+14));
+const p=new THREE.Mesh(new THREE.PlaneGeometry(2*r,2*r),new THREE.MeshStandardMaterial({map:new THREE.CanvasTexture(c2),transparent:true,roughness:.4,metalness:.3}));
+p.rotation.x=-Math.PI/2;p.position.set(px(cx),.682,pz(cy));uno.add(p)}
+cap(277,507,.32);cap(367,507,.36);
+// Componentes SMD pequenos
+[[180,125,26,12],[212,168,18,10],[208,190,16,10],[213,215,14,32],[183,317,16,26],[395,268,24,10],[397,285,24,10],[385,330,16,22],[548,354,26,10],[561,485,18,9],[336,442,26,30],[340,568,50,22],[366,185,10,32],[752,230,10,32],[310,437,14,14]].forEach(([x,y,w,d])=>B(x,y,w,d,.14,mBlk));
+[[245,278],[287,278],[317,278]].forEach(([x,y])=>B(x,y,22,10,.12,mWht));
+B(538,343,34,14,.1,mSil);B(133,316,25,32,.3,mOr);B(210,272,18,10,.1,mYel);B(372,442,10,16,.1,mYel);
+[[361,160],[360,213],[360,232],[747,206]].forEach(([x,y])=>B(x,y,26,14,.1,mAmb));
+// Puentes azules JP2 y RESET EN
+B(290,170,48,24,.03,mBlue);B(280,170,14,10,.05,mWht);B(300,170,14,10,.05,mWht);
+B(390,302,36,26,.03,mBlue);B(385,302,10,10,.05,mWht);B(397,302,10,10,.05,mWht);
+
+// ---- Serigrafia + pistas, dibujada en las coordenadas de la referencia ----
+const sk=document.createElement('canvas');sk.width=2100;sk.height=1674;const q=sk.getContext('2d');
+q.scale(3,3);q.translate(-105,-42);
+q.save();q.beginPath();[[105,42],[772,42],[778,48],[778,182],[805,208],[805,590],[795,600],[115,600],[105,590]].forEach(([x,y],i)=>i?q.lineTo(x,y):q.moveTo(x,y));q.clip();
+let sd=7;const rnd=()=>(sd=(sd*16807)%2147483647)/2147483647;
+q.strokeStyle='rgba(110,160,240,.12)';q.lineWidth=1.6;q.lineJoin='round';
+for(let k=0;k<130;k++){let x=105+rnd()*700,y=42+rnd()*558;q.beginPath();q.moveTo(x,y);for(let j=0;j<4;j++){if(j%2)y+=(rnd()-.5)*90;else x+=(rnd()-.5)*110;q.lineTo(x,y)}q.stroke()}
+q.restore();
+q.fillStyle=q.strokeStyle='#eef3ff';q.textBaseline='middle';
+function T(t,x,y,sz,rot=0,al='left',w='bold'){q.save();q.translate(x,y);q.rotate(rot*Math.PI/180);q.font=w+' '+sz+'px Arial';q.textAlign=al;q.fillText(t,0,0);q.restore()}
+const t1=['','','AREF','GND','13','12','~11','~10','~9','8'],t2=['7','~6','~5','4','~3','2','TX\u21921','RX\u21900'],pw=['','IOREF','RESET','3.3V','5V','GND','GND','Vin'],an=['A0','A1','A2','A3','A4','A5'];
+const col=(a,x0,y,sz,al)=>a.forEach((t,k)=>T(t,x0+13.3+26.7*k,y,sz,-90,al));
+col(t1,268,97,16,'right');col(t2,565,97,16,'right');col(pw,377,556,20,'left');col(an,607,556,20,'left');
+q.lineWidth=1.6;q.beginPath();q.moveTo(380,134);q.lineTo(777,134);q.moveTo(455,497);q.lineTo(588,497);q.moveTo(632,497);q.lineTo(790,497);q.stroke();
+T('DIGITAL (PWM~)',568,124,17);T('POWER',538,509,15,0,'left','normal');T('ANALOG IN',695,509,15,0,'left','normal');
+T('RESET',121,87,13,-90,'center');T('JP2',260,178,10,-90,'center');T('L',344,160,12);T('TX',333,214,12,0,'right');T('RX',333,232,12,0,'right');
+T('ON',768,206,12);T('ICSP',778,255,13,0,'center');T('WWW.ARDUINO.CC - MADE IN ITALY',568,357,12,0,'left','normal');
+// logo infinito (- +), ARDUINO y UNO
+q.lineWidth=7;q.beginPath();q.arc(464,165,22,0,7);q.stroke();q.beginPath();q.arc(520,165,22,0,7);q.stroke();
+q.lineWidth=6;q.beginPath();q.moveTo(453,165);q.lineTo(475,165);q.moveTo(509,165);q.lineTo(531,165);q.moveTo(520,154);q.lineTo(520,176);q.stroke();
+T('ARDUINO',493,207,21,0,'center');
+q.lineWidth=2;q.setLineDash([3,4]);q.beginPath();q.moveTo(612,148);q.lineTo(701,148);q.arcTo(735,148,735,182,34);q.lineTo(735,182);q.arcTo(735,216,701,216,34);q.lineTo(612,216);q.arcTo(578,216,578,182,34);q.arcTo(578,148,612,148,34);q.stroke();q.setLineDash([]);
+T('UNO',655,184,60,0,'center','normal');
+const sil=new THREE.Mesh(new THREE.PlaneGeometry(700*SX,558*SZ),new THREE.MeshStandardMaterial({map:new THREE.CanvasTexture(sk),transparent:true,roughness:.6,polygonOffset:true,polygonOffsetFactor:-2}));
+sil.material.map.anisotropy=8;sil.rotation.x=-Math.PI/2;sil.position.y=.0815;uno.add(sil);
+uno.traverse(o=>{if(o.material&&o.material.envMapIntensity!==undefined)o.material.envMapIntensity=.45});
+
+const model=new THREE.Group();model.add(uno);scene.add(model);
+const sc=document.createElement('canvas');sc.width=sc.height=128;const sg=sc.getContext('2d');
+const gr=sg.createRadialGradient(64,64,10,64,64,64);gr.addColorStop(0,'rgba(0,0,0,.45)');gr.addColorStop(1,'rgba(0,0,0,0)');sg.fillStyle=gr;sg.fillRect(0,0,128,128);
+const shadow=new THREE.Mesh(new THREE.PlaneGeometry(10,8),new THREE.MeshBasicMaterial({map:new THREE.CanvasTexture(sc),transparent:true,depthWrite:false}));
+shadow.rotation.x=-Math.PI/2;shadow.position.y=-.1;model.add(shadow);
+
+
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
+
+// ---- AR con camara: un solo boton ----
+const vid=document.getElementById('v'),fbBtn=document.getElementById('fb'),exBtn=document.getElementById('ex'),tt=document.getElementById('t');
+const arCam=new THREE.PerspectiveCamera(60,innerWidth/innerHeight,.01,50),AR_SCALE=.06;
+let mode=0,dco=null,stream=null,xrs=null,hitSrc=null,placed=false,tries=0;
+addEventListener('resize',()=>{arCam.aspect=innerWidth/innerHeight;arCam.updateProjectionMatrix()});
+function placeAt(pos,cp){model.position.copy(pos);model.quaternion.setFromEuler(new THREE.Euler(0,Math.atan2(cp.x-pos.x,cp.z-pos.z),0));model.visible=true;placed=true}
+function begin(m){mode=m;placed=false;tries=0;model.scale.setScalar(AR_SCALE);model.visible=false;controls.enabled=false;
+fbBtn.style.display='none';exBtn.style.display='inline-block';tt.style.display='none';
+document.body.style.background=document.documentElement.style.background='transparent';document.body.style.touchAction='none';
+msg.textContent='Mueve un poco el celular y la placa aparece sola. Arrastra para girarla en 360°, pellizca para el tamaño.'+(m==1?' (En este navegador la placa sigue tus giros, no tus pasos.)':'')}
+function stopAR(fromEnd){mode=0;if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}vid.style.display='none';
+if(xrs&&!fromEnd){try{xrs.end()}catch(e){}}xrs=null;hitSrc=null;
+model.scale.setScalar(1);model.position.set(0,0,0);model.quaternion.identity();model.visible=true;controls.enabled=true;
+document.body.style.background=document.documentElement.style.background='';document.body.style.touchAction='';
+exBtn.style.display='none';fbBtn.style.display='inline-block';tt.style.display='';msg.textContent=''}
+async function startXR(){
+const s=await navigator.xr.requestSession('immersive-ar',{optionalFeatures:['hit-test','dom-overlay','local'],domOverlay:{root:document.body}});
+renderer.xr.setReferenceSpaceType('local');await renderer.xr.setSession(s);xrs=s;
+try{const vs=await s.requestReferenceSpace('viewer');hitSrc=await s.requestHitTestSource({space:vs})}catch(e){hitSrc=null}
+s.addEventListener('end',()=>{if(mode==2)stopAR(true)});begin(2)}
+async function startGyro(){try{
+if(window.DeviceOrientationEvent&&DeviceOrientationEvent.requestPermission){const r=await DeviceOrientationEvent.requestPermission();if(r!=='granted')throw new Error('permiso de movimiento denegado')}
+stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'},audio:false});
+vid.srcObject=stream;vid.style.display='block';dco=new THREE.DeviceOrientationControls(arCam);begin(1)
+}catch(e){msg.textContent='No se pudo abrir la cámara: '+e.message}}
+fbBtn.onclick=async()=>{
+if(navigator.xr){try{if(await navigator.xr.isSessionSupported('immersive-ar')){await startXR();return}}catch(e){}}
+startGyro()};
+exBtn.onclick=()=>stopAR(false);
+// giro libre 360 (arriba, abajo, lados) y pellizco para tamano
+const pts=new Map();let pd=0,sc0=1;
+function spin(dx,dy){const q=new THREE.Quaternion().setFromRotationMatrix((mode==2?renderer.xr.getCamera(camera):arCam).matrixWorld);
+const up=new THREE.Vector3(0,1,0).applyQuaternion(q),rt=new THREE.Vector3(1,0,0).applyQuaternion(q);
+model.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(up,dx*.01)).premultiply(new THREE.Quaternion().setFromAxisAngle(rt,dy*.01))}
+document.addEventListener('pointerdown',e=>{if(!mode||e.target.closest('button'))return;pts.set(e.pointerId,{x:e.clientX,y:e.clientY});
+if(pts.size==2){const[a,b]=[...pts.values()];pd=Math.hypot(a.x-b.x,a.y-b.y);sc0=model.scale.x}});
+document.addEventListener('pointermove',e=>{if(!mode||!pts.has(e.pointerId))return;const o=pts.get(e.pointerId),n={x:e.clientX,y:e.clientY};
+if(pts.size==1)spin(n.x-o.x,n.y-o.y);pts.set(e.pointerId,n);
+if(pts.size==2){const[a,b]=[...pts.values()];model.scale.setScalar(Math.max(.01,Math.min(.4,sc0*Math.hypot(a.x-b.x,a.y-b.y)/pd)))}});
+['pointerup','pointercancel'].forEach(ev=>document.addEventListener(ev,e=>pts.delete(e.pointerId)));
+// colocacion automatica
+function xrAuto(frame){if(placed)return;tries++;if(tries<20)return;let pos=null;
+if(hitSrc){const h=frame.getHitTestResults(hitSrc);if(h.length){const p=h[0].getPose(renderer.xr.getReferenceSpace()).transform.position;pos=new THREE.Vector3(p.x,p.y,p.z)}}
+const cam=renderer.xr.getCamera(camera),cp=new THREE.Vector3().setFromMatrixPosition(cam.matrixWorld);
+if(!pos&&tries>100){pos=cp.clone().add(new THREE.Vector3(0,0,-1).transformDirection(cam.matrixWorld).multiplyScalar(1));pos.y=cp.y-.4}
+if(pos)placeAt(pos,cp)}
+renderer.setAnimationLoop((t,frame)=>{
+if(mode==2){if(frame)xrAuto(frame);renderer.render(scene,camera);return}
+if(mode==1){dco.update();if(!placed&&++tries>12){const f=new THREE.Vector3(0,0,-1).applyQuaternion(arCam.quaternion);placeAt(f.multiplyScalar(1),new THREE.Vector3())}
+renderer.render(scene,arCam);return}
+controls.update();renderer.render(scene,camera)});
+</script></body></html>
